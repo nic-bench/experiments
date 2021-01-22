@@ -12,3 +12,8 @@ The experiments are managed using (NPF)[http://github.com/tbarbette/npf/], it wi
 ## Running
 
 Just type make :) The experiments will produce automatically the files.
+
+
+## Results of experiments (including other NICs)
+
+Yet to be added to this repo, stay tuned ! :)
