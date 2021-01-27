@@ -1,0 +1,151 @@
+%info
+Scripts playing traffic while playing with trace: Figure 3, 4 and 6
+
+%config
+timeout=100
+result_add={REHASH}
+results_expect={DUT_THROUGHPUT}
+prate:results_expect+={LATENCY}
+
+%variables
+PKTGEN_REPLAY_COUNT=250
+TIMING_FNT=900
+TIMING=1
+ITERATIVE=0
+simple:RPS=[1-40000#2000]
+CPU=[0-1]
+-dump,-simple,-batch:RPS=[0-10000#1000]
+high,-dump,-simple,-batch:RPS={10000,20000,30000,40000,50000,60000,70000,80000,90000,100000,200000,300000,400000,500000}
+batch:RULES={1,1000,2000,3000,4000,5000,6000,7000,8000,9000,10000,20000,30000,40000,50000,60000,70000,80000,90000,100000}
+batch:PERIOD=0
+MASK=255.255.255.255
+dump:PERIOD=0
+batch:PREWAIT=2
+rps:PREWAIT=0
+simple:PREWAIT=10
+prate:TIMING_FNT=600
+prate:GEN_BLOCKING=false
+
+%late_variables
+simple:UPD?=0
+
+SAMPLE=100
+-batch,-dump:FREQ=EXPAND($(( min(1000,$RPS) )) )
+-batch,-dump:RULES=EXPAND($(( int($RPS/$FREQ) )) )
+-batch,-dump:PERIOD=EXPAND($(( int(1000000 / $FREQ) )) )
+
+TABLE?=1
+
+//%include gen.npf
+//%import@client fastclick-play-single-mt trace=ip.dump PKTGEN_REPLAY_COUNT=1000 SAMPLE=100 waitfor=FWREADY GEN_PIPELINE=0 GEN_DUMP=1
+%-sum:import@client fastclick-replay-single-mt-timing trace=/mnt/traces/synthetic/trace-UDP-C10000-O1-F1-P1500.pcap delay=2
+
+%batch|rps:script@dut sudo=true
+tpath=$(realpath ${NPF_TESTIE_PATH})
+echo "RPS $RPS, Freq $FREQ, RULES per RPS $RULES, PERIOD $PERIOD"
+killall -9 click
+sleep 5
+LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
+cd ${NICBENCH_PATH}
+sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix tom -w ${dut:0:pci} -m 8192M -l 0-2 -- $tpath/forwarder.click period=$PERIOD verbosity=0 coreNb=$CPU rulesNb=$RULES table=$TABLE mask=$MASK prewait=$PREWAIT
+
+%update:script@dut sudo=true
+echo "RPS $RPS, Freq $FREQ, RULES per RPS $RULES, PERIOD $PERIOD"
+killall -9 click
+sleep 5
+LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
+cd ${NICBENCH_PATH}
+sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix tom -w ${dut:0:pci} -m 8192M -l 0-$CPU -- FWD-U period=$PERIOD verbosity=0 coreNb=$CPU rulesNb=$RULES table=$TABLE mask=$MASK
+
+%simple:script@dut sudo=true
+tpath=$(realpath $(pwd))
+LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
+cd ${NICBENCH_PATH}
+sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix tom -w ${dut:0:pci} -l 0-2 -- ${tpath}/updater.click period=$(( float($PERIOD) / 1000000)) rulesNb=$RULES coreNb=$CPU prewait=$PREWAIT
+
+%bath|rps:sendfile@dut forwarder.click
+
+%simple:file@dut updater.click
+define($dut_iteration_time 1)
+
+fd0 :: FromDPDKDevice(0,FLOW_ISOLATE false, IPCO false, TCO false, VERBOSE 99, PROMISC true)
+ //   -> Print(FD)
+    -> avg :: AverageCounter(IGNORE 1, THRESHOLD 1000)
+    -> EtherMirror
+    -> ToDPDKDevice(0, BLOCKING false)
+
+ruleInstaller :: FlowRuleInstaller(
+    NIC                 fd0,                 // NICs to use
+    PIN_TO_CORE       $coreNb,             // Core to pin this element
+    VERBOSE           0
+);
+
+iterative :: Script(TYPE PASSIVE,
+            set start $(now_steady),
+
+            set s 0,
+            label loop,
+            set time $(now_steady),
+            set diff $(sub $time $start),
+            print $diff,
+            set s $(add $s ${dut_iteration_time}),
+            print "NF-$s-RESULT-NUMFLOWS $(ruleInstaller.flow_count fd0 whatever)",
+            wait ${dut_iteration_time}s,
+            gotoa loop $(lt $diff 10))
+
+adder :: Script(TYPE PASSIVE,
+
+                set last $(now_steady),
+                set i 0,
+
+                label upd_l,
+
+                /*
+                set x $(ruleInstaller.flow_create_5t udp 1.0.0.1 2056 2.0.0.2 2057 1 0),
+                label upd_l,
+                set last $(now_steady),
+                set r $(ruleInstaller.flow_update_5t $x 1.0.0.1 2056 2.0.0.2 $(mod $i 65536)),
+*/
+
+                set last $(now_steady),
+
+                print >/dev/null $(ruleInstaller.$(("flow_update_5t_list" if $UPD else "flow_update_seq_5t_list")) $rulesNb 1 255.255.255.255 udp),
+                //Number of iterations
+                set i $(add $i $rulesNb),
+
+                write dm.set i $i,
+                //How much to wait
+                set f $(now_steady),
+                set l $(sub $period $(sub $f $last)),
+
+                gotoa upd_l $(le $l 0),
+                wait ${l}s,
+                gotoa upd_l,
+
+);
+
+
+dm :: DriverManager(
+                read ruleInstaller.flow_flush,
+                write iterative.run,
+                wait ${prewait},
+                print "Adding 65536 rule",
+
+                //I?OT
+                set start $(now_steady),
+                read ruleInstaller.flow_create_5t_list 65536 1 255.255.255.255 udp,
+                print "",
+                write adder.run,
+                wait 5s,
+                set last $(now_steady),
+
+
+                print "RESULT-DUT_EFFECTIVERATE $(div $i $(sub $last $start))"
+                print "$i updates in $(sub $last $start)",
+                print "RESULT-DUT_THROUGHPUT $(avg.link_rate)",
+
+read fd0.xstats)
+
+StaticThreadSched(dm 2, adder $coreNb, fd0 0, iterative 2);
+
+%import graph-beautiful
