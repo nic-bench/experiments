@@ -1,0 +1,453 @@
+%info
+Effects of rule-based forwarding on the performance of a simple overlay NF.
+The NIC dispatches input frames to the NF according to a set of flow rules.
+Only input packets that match a rule are processed by the NF.
+We study whether the number of rules being installed, the choice of table,
+as well as the position of the matching rule may affect packet processing latency.
+
+The following NICs are tested:
+  * Dual port  10 GbE Intel 82599 ES      (NPF tag intel-82599)
+  * Dual port  40 GbE Intel XL710         (NPF tag intel-xl710)
+  * Dual port 100 GbE Mellanox ConnectX-4 (NPF tag mlnx-cx4)
+  * Dual port 100 GbE Mellanox ConnectX-5 (NPF tag mlnx-cx5)
+  * Dual port 200 GbE Mellanox ConnectX-6 (NPF tag mlnx-cx6)
+  * Dual port 100 GbE Mellanox Bluefield  (NPF tag mlnx-bf1)
+
+To ensure stable results we test all the NICs above on servers with the same hardware architecture and the same DPDK version.
+We chose a dual-socket 16-core Intel Xeon Gold 6134 (Skylake) and the DPDK v20.08.
+
+    /////////////////////////////////////////////////////////////////////////////////////////////////////
+    
+    ////////////////////////////////////////////// FINDINGS /////////////////////////////////////////////
+    // NIC capacity
+    // --> CX4 has a single NIC rule table (i.e., group 0).
+    //     [Table 0] Flow rule 0 can't be created 16 message: cannot create jump action.
+    // --> CX5 has multiple NIC rule tables.
+    //     [Table 0] Flow rule 268420412 can't be created 1 message: not enough memory to create flow handle (capacity 268.420.412 rules with --ingress --queue)
+    //     [Table 1] Flow rule 268420411 can't be created 1 message: not enough memory to create flow handle (capacity 268.420.411 rules with --ingress --queue) (starts at 131 GB and crashes at ~300 GB)
+    // --> CX6 has multiple NIC rule tables.
+    //     [Table 0] Flow rule 268420412 can't be created 1 message: not enough memory to create flow handle (capacity 268.420.412 rules with --ingress --queue)
+    //     [Table 1] Flow rule 268420411 can't be created 1 message: not enough memory to create flow handle (capacity 268.420.411 rules with --ingress --queue)
+    // --> BF1 has a single NIC rule table (i.e., group 0). <-- Mellanox does not confirm that, check again
+    // Memory available for per-flow counters
+    // --> CX4 has a limit of 65464 rules in table 0 when count action is used (hardware refuses to create flow: No space left on device).
+    // --> CX5 has a limit of 65537 rules in table 0 when count action is used (hardware refuses to create flow: No space left on device).
+    // --> CX6 has a limit of 65537 rules in table 0 when count action is used (hardware refuses to create flow: No space left on device).
+    // --> BF1 has a limit of 65537 rules in table 0 when count action is used (hardware refuses to create flow: No space left on device).
+    /////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// List of variables
+%variables
+
+// Trace files location
+TRACE_BASE=/mnt/traces/synthetic
+
+// The location of this repo
+THIS_REPO=/home/tom/workspace/nic-bench-experiments
+
+// The location of Click
+CLICK_EXEC=/home/katsikas/projects/nfv/projects/fastclick/bin/click
+
+// Number of consecutive packets from each client
+O=1
+
+// Different rule sets
+FLOW_RULES_NB={1,16000,32000,56000,57000,58000,59000,60000,61000,62000,63000,64000,65000,65536}
+
+// Position of the matching rule in the ruleset
+FLOW_MATCH_POS={first,middle,last}
+
+// Number of Rx queues at the DUT
+RX_QUEUES_NB=1
+
+// Constants
+
+// Number of clients (flows)
+C=10000
+
+// Number of packets per client
+N=2000
+
+// Length of each packet
+PKT_LENGTH=64
+
+// Number of flows per client
+CLIENT_FLOWS=1
+
+// Proto
+PROTO=UDP
+
+// Number of Rx queues
+RX_QUEUES_NB_DEF=1
+
+// Queue size at the transmission element
+TX_QUEUE_SIZE=1024
+
+// Batch size
+BURST=32
+
+// Receiver NIC mode is set to Flow Dispatcher
+RX_MODE=flow
+
+// Pause the sender until the receiver gets all packets
+PAUSE=full
+
+// Promiscuous mode status
+PROMISC_GEN=true
+PROMISC_DUT=false
+
+// Verbosity level
+VERBOSE=99
+
+// Sleep time in seconds before DUT is restarted. Allows previous instance to flush NIC rules
+DUT_DELAY=20
+intel-82599:DUT_DELAY=5
+intel-xl710:DUT_DELAY=5
+mlnx-cx4:DUT_DELAY=20 // For safety, bump up the amount of time to make sure that the NIC finishes flushing even when the number of rules is very high
+mlnx-cx5:DUT_DELAY=20 // For safety, bump up the amount of time to make sure that the NIC finishes flushing even when the number of rules is very high
+mlnx-cx6:DUT_DELAY=20 // For safety, bump up the amount of time to make sure that the NIC finishes flushing even when the number of rules is very high
+mlnx-bf1:DUT_DELAY=20 // For safety, bump up the amount of time to make sure that the NIC finishes flushing even when the number of rules is very high
+
+// Delay in seconds before the traffic generator is launched
+GEN_DELAY=30
+intel-82599:GEN_DELAY=2
+intel-xl710:GEN_DELAY=2
+mlnx-cx4:GEN_DELAY=40
+mlnx-cx5:GEN_DELAY=40
+mlnx-cx6:GEN_DELAY=40
+mlnx-bf1:GEN_DELAY=40
+
+// Default flow table group number
+FLOW_GROUP_NB=0
+
+// Isolation mode guarantees that all ingress traffic comes from defined flow rules only (current and future)
+FLOW_ISOLATE=true
+
+// Presense of a "count" operation in each rule
+cnt-no:FLOW_COUNT_DIR="cnt-no"
+cnt-no-prio:FLOW_COUNT_DIR="cnt-no-prio"
+cnt-yes:FLOW_COUNT_DIR="cnt-yes"
+
+cnt-no|cnt-no-prio:FLOW_COUNT_ACTION="cnt_no"
+cnt-yes:FLOW_COUNT_ACTION="cnt_yes"
+
+intel-82599:FLOW_SPEC_OP="_spec_only"
+intel-82599:FLOW_SPEC_DIR="spec-only"
+intel-xl710:FLOW_SPEC_OP="_spec_only"
+intel-xl710:FLOW_SPEC_DIR="spec-only"
+mlnx-cx4:FLOW_SPEC_OP=""
+mlnx-cx4:FLOW_SPEC_DIR="."
+mlnx-cx5:FLOW_SPEC_OP=""
+mlnx-cx5:FLOW_SPEC_DIR="."
+mlnx-cx6:FLOW_SPEC_OP=""
+mlnx-cx6:FLOW_SPEC_DIR="."
+mlnx-bf1:FLOW_SPEC_OP=""
+mlnx-bf1:FLOW_SPEC_DIR="."
+
+
+
+%late_variables
+
+// CPU socket to use
+intel-82599:CPU_SOCKET=0
+intel-xl710:CPU_SOCKET=0
+mlnx-cx4:CPU_SOCKET=1
+mlnx-cx5:CPU_SOCKET=0
+mlnx-cx6:CPU_SOCKET=1
+mlnx-bf1:CPU_SOCKET=0
+
+// Number of CPU cores to use
+CPU_CORES=1
+// Socket-aware CPU core index
+CPU_INDEX=$(( (8 * $CPU_SOCKET) + $CPU_CORES - 1 ))
+
+// Traffic generator's information
+GEN_SERVER=EXPAND(${client:addr})
+GEN_ARCH=EXPAND(${client:arch})
+GEN_NIC_IFACE=EXPAND(${client:0:ifname})
+GEN_NIC_MAC=EXPAND(${client:0:mac})
+GEN_NIC_IP=EXPAND(${client:0:ip})
+GEN_NIC_PCI=EXPAND(${client:0:pci})
+
+// DUT information
+TARGET_SERVER=EXPAND(${dut:addr})
+TARGET_ARCH=EXPAND(${dut:arch})
+TARGET_NIC_IFACE=EXPAND(${dut:0:ifname})
+TARGET_NIC_MAC=EXPAND(${dut:0:mac})
+TARGET_NIC_IP=EXPAND(${dut:0:ip})
+TARGET_NIC_PCI=EXPAND(${dut:0:pci})
+
+// Some important sauce
+intel-82599:LABEL="10 GbE Intel 82599 ES"
+intel-xl710:LABEL="40 GbE Intel XL710"
+mlnx-cx4:LABEL="100 GbE Mellanox CX-4"
+mlnx-cx5:LABEL="100 GbE Mellanox CX-5"
+mlnx-cx6:LABEL="200 GbE Mellanox CX-6"
+mlnx-bf1:LABEL="100 GbE Mellanox Bluefield"
+
+// Default size of the rule set
+FLOW_RULES_NB_DEF=1000
+
+// Total number of packets
+LIMIT=EXPAND($(( $N * $C )))
+
+// Limit per client
+CLIENT_LIMIT=EXPAND($(( int($LIMIT / $N) )))
+
+// Input trace path
+TRACE=EXPAND(${TRACE_BASE}/trace-${PROTO}-C${C}-O${O}-F${CLIENT_FLOWS}-P${PKT_LENGTH}.pcap)
+
+// Traffic generator path
+TRAFFIC_GEN_SCRIPT=EXPAND(${THIS_REPO}/packet-gen/PKTGEN-ST-TRACE)
+dbgen:TRAFFIC_GEN_SCRIPT=EXPAND(${THIS_REPO}/packet-gen/PKTGEN-DT-TRACE)
+
+// Preserve MAC addresses in case of L2 FWD
+-l1:SRC_MAC=EXPAND(${client:0:mac})
+-l1:DST_MAC=EXPAND(${dut:0:mac})
+-l1:FWD_LABEL=EXPAND(L2)
+-l1:FWD_ELEM=EXPAND(EtherMirror)
+// Swap MAC addresses in case of L1 FWD
+l1:SRC_MAC=EXPAND(${dut:0:mac})
+l1:DST_MAC=EXPAND(${client:0:mac})
+l1:FWD_LABEL=EXPAND(L1)
+l1:FWD_ELEM=EXPAND(Null)
+
+CGEN=[0-31]
+CLIENTS=EXPAND(Fast${PROTO}Flows(RATE 0, LENGTH $PKT_LENGTH, LIMIT $CLIENT_LIMIT, SRCETH ${client:0:mac}, SRCIP 10.$((int(${CGEN} / 256) )).$((${CGEN} % 256 )).1, DSTETH ${dut:0:mac}, DSTIP ${dut:0:ip}, FLOWS $CLIENT_FLOWS, FLOWSIZE $N, STOP true) -> NumberPacket(OFFSET 52) -> [$CGEN]rr;)
+CLIENTS=HEAD($C, $CLIENTS)
+CGEN=
+
+
+%config
+timeout=300
+var_names={FLOW_RULES_NB:# of Rules,ISOLATED:Flow Isolation,TOTAL-RULES-NB:Installed Rules,PKT-LOSS:Packets lost,PKT-LOSS-RATIO:Packets lost,GEN-COUNT:Generated Packets,LAT-MAX:Maximum Latency,LAT-P99:99th perc. Latency,LAT-P95:95th perc. Latency,LAT-P75:75th perc. Latency,LAT-P50:Median Latency,LAT-AVG:Average Latency,LAT-P25:25th perc. Latency,LAT-P01:1st perc. Latency,LAT-MIN:Minimum Latency,LAT-STD:Latency Standard Deviation,TX-COUNT:Tx Count,TX-BYTE-RATE:Tx Rate,TX-PACKET-RATE:Tx Rate,RX-COUNT:Rx Count,RX-HW-COUNT:Rx HW Count,RX-SW-COUNT:Rx SW Count,RX-DROPPED-BAD-MAC:Rx Drops due to Invalid MAC,RX-BYTE-RATE:Rx Rate,RX-PACKET-RATE:Rx Rate,RX-THROUGHPUT:Throughput,DUT-RX-HW-COUNT:DUT Rx HW Count,DUT-RX-SW-COUNT:DUT Rx SW Count,DUT-RX-QUEUE-0-PACKETS:DUT Rx Queue 0,DUT-RX-QUEUE-0-BYTES:DUT Rx Queue 0,DUT-TX-SW-COUNT:DUT Tx SW Count,DUT-PKT-LOSS:DUT Packets Lost,DUT-PKT-LOSS-RATIO:DUT Packets Lost,TESTTIME:Experiment Duration,RCVTIME:Processing Duration}
+
+var_unit={FLOW_RULES_NB:Number,ISOLATED:0->False 1->True,TOTAL-RULES-NB:Number,PKT-LOSS:Number,PKT-LOSS-RATIO:%,GEN-COUNT:Number,LAT-MAX:μs,LAT-P99:μs,LAT-P95:μs,LAT-P75:μs,LAT-P50:μs,LAT-AVG:μs,LAT-P25:μs,LAT-P01:μs,LAT-MIN:μs,LAT-STD:μs,TX-COUNT:Packets,TX-BYTE-RATE:bps,TX-PACKET-RATE:pps,RX-COUNT:Packets,RX-HW-COUNT:Packets,RX-SW-COUNT:Packets,RX-DROPPED-BAD-MAC:Packets,RX-BYTE-RATE:bps,RX-PACKET-RATE:pps,RX-THROUGHPUT:bps,DUT-RX-HW-COUNT:Packets,DUT-RX-SW-COUNT:Packets,DUT-RX-QUEUE-0-PACKETS:Packets,DUT-RX-QUEUE-0-BYTES:Bytes,DUT-TX-SW-COUNT:Packets,DUT-PKT-LOSS:Number,DUT-PKT-LOSS-RATIO:%,TESTTIME:seconds,RCVTIME:seconds}
+
+var_format={FLOW_RULES_NB:%ld,ISOLATED:%d,TOTAL-RULES-NB:%ld,PKT-LOSS:%ld,PKT-LOSS-RATIO:%.2f,GEN-COUNT:%ld,LAT-MAX:%.1f,LAT-P99:%.1f,LAT-P95:%.1f,LAT-P75:%.1f,LAT-P50:%.1f,LAT-AVG:%.1f,LAT-P25:%.1f,LAT-P01:%.1f,LAT-MIN:%.1f,LAT-STD:%.1f,TX-COUNT:%.1f,TX-BYTE-RATE:%.1f,TX-PACKET-RATE:%.1f,RX-COUNT:%ld,RX-HW-COUNT:%ld,RX-SW-COUNT:%ld,RX-DROPPED-BAD-MAC:%ld,RX-BYTE-RATE:%.1f,RX-PACKET-RATE:%.1f,RX-THROUGHPUT:%.1f,DUT-RX-HW-COUNT:%ld,DUT-RX-SW-COUNT:%ld,DUT-RX-QUEUE-0-PACKETS:%ld,DUT-RX-QUEUE-0-BYTES:%ld,DUT-TX-SW-COUNT:%ld,DUT-PKT-LOSS:%ld,DUT-PKT-LOSS-RATIO:%.2f,TESTTIME:%.2f,RCVTIME:%.2f}
+
+// var_divider={TX-COUNT:1,TX-BYTE-RATE:1,TX-PACKET-RATE:1,RX-COUNT:1,RX-HW-COUNT:1,RX-SW-COUNT:1,RX-DROPPED-BAD-MAC:1,RX-BYTE-RATE:1,RX-PACKET-RATE:1,RX-THROUGHPUT:1,DUT-RX-HW-COUNT:1,DUT-RX-SW-COUNT:1,DUT-RX-QUEUE-0-PACKETS:1,DUT-RX-QUEUE-0-BYTES:1,DUT-TX-SW-COUNT:1}
+
+accept_zero={RX-DROPPED-BAD-MAC,PKT-LOSS,PKT-LOSS-RATIO,DUT-PKT-LOSS,DUT-PKT-LOSS-RATIO}
+
+// graph_variables_as_series={FLOW_RULES_NB}
+// graph_variables_as_series={FLOW_RULES_NB,FLOW_MATCH_POS}
+
+
+//---------------------------
+// Traffic Generator
+//---------------------------
+// Generate the input trace
+// %script@client deps=metron autokill=false sudo=true name=gen waitfor=DUT_READY delay=20
+%script@client deps=metron autokill=false sudo=true name=gen delay=2
+#!/bin/bash
+# No need to re-generate the same trace
+if [[ -f $TRACE ]]; then
+    pkts_in_trace=$(tcpdump -r $TRACE 2>/dev/null| wc -l)
+    echo "RESULT-GEN-COUNT "$pkts_in_trace
+    echo "EVENT TRACE_FINISHED"
+    exit 0
+fi
+echo "Generating trace ${TRACE}... This will take a while!"
+click gen.click
+echo "EVENT TRACE_FINISHED"
+
+%file@client gen.click
+td :: ToDump("$TRACE");
+rr :: RoundRobinMultiSched(N $O)
+    -> genCnt :: AverageCounterMP()
+    -> Unqueue
+    -> td;
+$CLIENTS
+
+DriverManager(
+    wait,
+    print "RESULT-GEN-COUNT "$(genCnt.count),
+    stop
+)
+
+// The single-threaded generator is mandatory
+%-stgen,-dbgen:require
+echo "This experiment requires a single-threaded traffic generator. Please use tag 'stgen'" && exit 1
+
+// Instantiate the single-threaded generator and replay the trace
+%stgen,-noplay:script@client deps=metron autokill=true sudo=true name=trx waitfor=DUT_READY
+echo "Starting gen"
+ls
+bash start_stgen.sh
+echo "Finished"
+
+%file@client start_stgen.sh
+echo "Parsing MACs"
+src_mac_raw=$(echo ${SRC_MAC} | tr -d :)
+dst_mac_raw=$(echo ${DST_MAC} | tr -d :)
+
+echo ""
+echo "Generator's     server: "${GEN_SERVER}
+echo "Generator's HW    Arch: "${GEN_ARCH}
+echo "Generator's NIC  Iface: "${GEN_NIC_IFACE}
+echo "Generator's NIC    MAC: "${GEN_NIC_MAC}
+echo "Generator's NIC     IP: "${GEN_NIC_IP}
+echo "Generator's NIC    PCI: "${GEN_NIC_PCI}
+echo ""
+echo "     Target     server: "${TARGET_SERVER}
+echo "     Target HW    Arch: "${TARGET_ARCH}
+echo "     Target NIC Vendor: "${LABEL}
+echo "     Target NIC  Table: "${FLOW_GROUP_NB}
+echo "     Target NIC  Iface: "${TARGET_NIC_IFACE}
+echo "     Target NIC    MAC: "${TARGET_NIC_MAC}
+echo "     Target NIC     IP: "${TARGET_NIC_IP}
+echo "     Target NIC    PCI: "${TARGET_NIC_PCI}
+echo ""
+echo "        # of NIC rules: "${FLOW_RULES_NB}
+echo "         Packet Length: "${PKT_LENGTH}
+echo "     Rule count action: "${FLOW_COUNT_ACTION}
+echo ""
+
+echo "sleep ${GEN_DELAY} && click --dpdk -l 0-7 -w ${GEN_NIC_PCI} -v -- ${TRAFFIC_GEN_SCRIPT} nolinktest=1 txport=${GEN_NIC_PCI} rxport=${GEN_NIC_PCI} PROMISC=${PROMISC_GEN} srcMacIn=${GEN_NIC_MAC} srcMacInRaw=${src_mac_raw} dstMacIn=${TARGET_NIC_MAC} dstMacInRaw=${dst_mac_raw} trace=${TRACE}"
+sleep ${GEN_DELAY} && click --dpdk -l 0-7 -w ${GEN_NIC_PCI} -v -- ${TRAFFIC_GEN_SCRIPT} nolinktest=1 txport=${GEN_NIC_PCI} rxport=${GEN_NIC_PCI} PROMISC=${PROMISC_GEN} srcMacIn=${GEN_NIC_MAC} srcMacInRaw=${src_mac_raw} dstMacIn=${TARGET_NIC_MAC} dstMacInRaw=${dst_mac_raw} trace=${TRACE}
+exit 0
+
+%perf:import@dut perf-functions delay=12 waitfor=TRACE_FINISHED
+
+//---------------------------
+// DUT configurations
+//---------------------------
+
+//-------------------------------- Beginning of rule-based FWD -------------------------------
+// %nic-rule-perf-bench,-promisc:require
+// echo "nic-rule-perf-bench needs the generator to be in promisc mode" && exit 1
+%nic-rule-perf-bench:script@dut deps=metron sudo=true autokill=false name=rule-based-fwd
+// Sleep for a few seconds to allow the previous Click instance to flush the NIC rules before it shuts down
+sleep ${DUT_DELAY} && click --dpdk -l ${CPU_INDEX} -w ${TARGET_NIC_PCI} -v -- rule-fwd.config rxQueuesNb=${RX_QUEUES_NB} flowRulesNb=${FLOW_RULES_NB} flowMatchPos=${FLOW_MATCH_POS} flowGroup=${FLOW_GROUP_NB} flowCountOp=${FLOW_COUNT_ACTION} flowCntDir=${FLOW_COUNT_DIR} flowSpecOp=${FLOW_SPEC_OP} flowSpecDir=${FLOW_SPEC_DIR} flowIsolate=${FLOW_ISOLATE}
+
+%file@dut rule-fwd.config
+define(
+    $iface         ${TARGET_NIC_PCI},
+    $rxMode        ${RX_MODE},
+    $rxQueuesNb    ${RX_QUEUES_NB_DEF},
+    $txQueueSize   ${TX_QUEUE_SIZE},
+    $burst         ${BURST},
+    $flowMatchPos  ${FLOW_MATCH_POS},
+    $flowRulesNb   ${FLOW_RULES_NB_DEF},
+    $flowGroup     ${FLOW_GROUP_NB},
+    $flowCountOp   ${FLOW_COUNT_ACTION},
+    $flowCntDir    ${FLOW_COUNT_DIR},
+    $flowSpecOp    ${FLOW_SPEC_OP},
+    $flowSpecDir   ${FLOW_SPEC_DIR},
+    $flowRulesFile ${THIS_REPO}/rulesets/group-${flowGroup}/${flowCntDir}/${flowSpecDir}/random_dpdk_rules_${flowRulesNb}_group_${flowGroup}_hw_queues_${rxQueuesNb}_match_${flowMatchPos}_${flowCountOp}${flowSpecOp}.dpdk,
+    $flowIsolate   ${FLOW_ISOLATE},
+    $pause         ${PAUSE},
+    $promisc       ${PROMISC_DUT},
+    $verbose       ${VERBOSE}
+);
+
+// Module's I/O
+nicIn  :: FromDPDKDevice(PORT $iface, N_QUEUES $rxQueuesNb, MODE $rxMode, FLOW_RULES_FILE $flowRulesFile, FLOW_ISOLATE $flowIsolate, PAUSE $pause, BURST $burst, PROMISC $promisc, VERBOSE $verbose, PAINT_QUEUE true);
+nicOut :: ToDPDKDevice(PORT $iface, IQUEUE $txQueueSize, BURST $burst);
+
+nicIn
+//    -> MarkIPHeader(OFFSET 14)
+//    -> IPPrint(DUT-NIC-Rules, ETHER true, LENGTH true, TTL true)
+    -> c :: {[0] -> ps :: PaintSwitch;ps[0]->ci::Counter->[0];ps[1]->cm::Counter->[0]; }
+    -> $FWD_ELEM
+    -> nicOut;
+
+DriverManager(
+    label loop,
+    print "EVENT DUT_READY",
+    wait 1s,
+    gotoa loop,
+    print "======================================================",
+    print "=== NIC Statistics",
+    print "======================================================",
+    read nicIn.xstats,
+    print "======================================================",
+//    print "Matching rules list:\n"$(nicIn.rules_list_with_hits),
+//    print "",
+//    print "Aggregate rule statistics:\n"$(nicIn.rules_aggr_stats),
+    set rx_hw_pkt_count $(nicIn.hw_count),
+    set rx_sw_pkt_count $(nicIn.count),
+    set rx_sw_queue0_pkts $(nicIn.queue_packets 0),
+    set rx_sw_queue1_pkts $(nicIn.queue_packets 1),
+    set rx_sw_queue0_bytes $(nicIn.queue_bytes 0),
+    set tx_sw_pkt_count $(nicOut.count),
+    set pkt_loss_nb $(sub $rx_sw_pkt_count $tx_sw_pkt_count),
+    set pkt_loss_ratio $(mul $(div $pkt_loss_nb $rx_sw_pkt_count) 100),
+    set rules_nb $(nicIn.rules_count),
+    set rules_isolate $(nicIn.rules_isolate),
+    print "======================================================",
+    print "RESULT-DUT-RX-HW-COUNT "$rx_hw_pkt_count,
+    print "RESULT-DUT-RX-SW-COUNT "$rx_sw_pkt_count,
+    print "RESULT-DUT-RX-QUEUE-0-PACKETS "$rx_sw_queue0_pkts,
+    print "RESULT-DUT-RX-QUEUE-1-PACKETS "$rx_sw_queue1_pkts,
+    print "RESULT-DUT-RX-QUEUE-0-BYTES "$rx_sw_queue0_bytes,
+    print "",
+    print "RESULT-DUT-TX-SW-COUNT "$tx_sw_pkt_count,
+    print "",
+    print "RESULT-DUT-PKT-LOSS "$pkt_loss_nb,
+    print "RESULT-DUT-PKT-LOSS-RATIO "$pkt_loss_ratio,
+    print "",
+    print "RESULT-TOTAL-RULES-NB "$rules_nb,
+    print "",
+    print "RESULT-ISOLATED "$rules_isolate,
+    print "======================================================",
+    stop,
+);
+//----------------------------------- End of rule-based FWD ----------------------------------
+
+//--------------------------------- Beginning of RSS-based FWD -------------------------------
+%rss-fwd:script@dut deps=metron sudo=true autokill=false name=rss-based-fwd
+click --dpdk -l ${CPU_INDEX} -w ${TARGET_NIC_PCI} -v -- rss-fwd.config rxQueuesNb=${RX_QUEUES_NB}
+
+%file@dut rss-fwd.config
+define(
+    $iface         ${TARGET_NIC_PCI},
+    $rxQueuesNb    ${RX_QUEUES_NB_DEF},
+    $txQueueSize   ${TX_QUEUE_SIZE},
+    $fwdElement    ${FWD_ELEM},
+    $burst         ${BURST},
+    $pause         ${PAUSE},
+    $promisc       ${PROMISC_DUT},
+    $verbose       ${VERBOSE}
+);
+
+// Module's I/O
+nicIn  :: FromDPDKDevice(PORT $iface, N_QUEUES $rxQueuesNb, PAUSE $pause, BURST $burst, PROMISC $promisc, VERBOSE $verbose, PAINT_QUEUE true);
+nicOut :: ToDPDKDevice(PORT $iface, IQUEUE $txQueueSize, BURST $burst);
+
+nicIn
+//    -> MarkIPHeader(OFFSET 14)
+//    -> IPPrint(DUT-NIC-RSS, ETHER true, LENGTH true, TTL true)
+    -> $FWD_ELEM
+    -> nicOut;
+
+DriverManager(
+    print "EVENT DUT_READY",
+    wait,
+    print "======================================================",
+    print "=== NIC Statistics",
+    print "======================================================",
+    read nicIn.xstats,
+    print "======================================================",
+    set rx_hw_pkt_count $(nicIn.hw_count),
+    set rx_sw_pkt_count $(nicIn.count),
+    set rx_sw_queue0_pkts $(nicIn.queue_packets 0),
+    set rx_sw_queue0_bytes $(nicIn.queue_bytes 0),
+    set tx_sw_pkt_count $(nicOut.count),
+    set pkt_loss_nb $(sub $rx_sw_pkt_count $tx_sw_pkt_count),
+    set pkt_loss_ratio $(mul $(div $pkt_loss_nb $rx_sw_pkt_count) 100),
+    print "======================================================",
+    print "RESULT-DUT-RX-HW-COUNT "$rx_hw_pkt_count,
+    print "RESULT-DUT-RX-SW-COUNT "$rx_sw_pkt_count,
+    print "RESULT-DUT-RX-QUEUE-0-PACKETS "$rx_sw_queue0_pkts,
+    print "RESULT-DUT-RX-QUEUE-0-BYTES "$rx_sw_queue0_bytes,
+    print "",
+    print "RESULT-DUT-TX-SW-COUNT "$tx_sw_pkt_count,
+    print "",
+    print "RESULT-DUT-PKT-LOSS "$pkt_loss_nb,
+    print "RESULT-DUT-PKT-LOSS-RATIO "$pkt_loss_ratio,
+    print "======================================================",
+    stop,
+);
+//------------------------------------ End of RSS-based FWD ----------------------------------

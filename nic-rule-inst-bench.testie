@@ -1,0 +1,198 @@
+%info
+Study NIC rule insertion/deletion performance of DPDK-based NICs.
+We study:
+  * whether the number of rules installed in the NIC affects the insertion/deletion performance (rule-nb-effect)
+  * whether the choice of table affects the insertion/deletion performance (table-nb-effect)
+  * whether the number/type of match operations affects the insertion/deletion performance (match-op-effect)
+  * whether the number/type of action operations affects the insertion/deletion performance (action-op-effect)
+
+The following NICs are tested:
+  * Dual port  10 GbE Intel 82599 ES      (NPF tag intel-82599)
+  * Dual port  40 GbE Intel XL710         (NPF tag intel-xl710)
+  * Dual port 100 GbE Mellanox ConnectX-4 (NPF tag mlnx-cx4)
+  * Dual port 100 GbE Mellanox ConnectX-5 (NPF tag mlnx-cx5)
+  * Dual port 200 GbE Mellanox ConnectX-6 (NPF tag mlnx-cx6)
+  * Dual port 100 GbE Mellanox Bluefield  (NPF tag mlnx-bf1)
+
+To ensure stable results we test all the NICs above on servers with the same hardware architecture and the same DPDK version.
+We chose a dual-socket 16-core Intel Xeon Gold 6134 (Skylake) and the DPDK v20.08 flow-perf test.
+
+%variables
+
+ATOMIC={0,1}
+
+// The location of the DPDK repo
+DPDK_REPO=/home/tom/workspace/dpdk-updated/
+
+// The PCI address of the Target NIC port
+TARGET_NIC_PORT=0
+
+// Different number of flow rules
+// FLOW_RULES_NB={2,16000,32000,56000,57000,58000,59000,60000,61000,62000,63000,64000,65000,65536}
+FLOW_RULES_NB={100000,200000,300000,400000,500000,600000,700000,800000,900000,1000000,2000000,3000000,4000000,5000000}
+
+// Flow attribute regarding the direction of flows (ingress/transfer/egress)
+FLOW_DIRECTION_ATTR=ingress
+
+// Default flow table group number must be greater than 0; table 0 has limited capacity and performance
+FLOW_GROUP_NB=1
+
+// Default number of batches flow rules
+DEFAULT_FLOW_RULES_BATCH=10000
+
+// Number of CPU cores to use
+CPU_CORES=2
+CPU_INDEX=$(( $CPU_CORES - 1 ))
+
+// Various combinations of match-action operations
+// Matches: 1 -- Actions: 1-4
+MATCH_OPS={--ether}
+ACTION_OPS={--queue,--mark --queue,--mark --set-meta --queue,--mark --set-meta --set-tag --queue}
+
+// Matches: 1-4 -- Actions: 1
+// MATCH_OPS={--ether,--ether --vlan,--ether --vlan --ipv4,--ether --vlan --ipv4 --tcp}
+// ACTION_OPS={--queue}
+
+// Matches: IPv4 vs. IPv6 -- Actions: 1
+// MATCH_OPS={--ether,--ether --ipv4,--ether --ipv6,--ether --ipv4 --tcp,--ether --ipv6 --tcp}
+// ACTION_OPS={--queue}
+
+// Matches: Tunnels -- Actions:1
+// MATCH_OPS={--ether,--ether --vlan,--ether --vlan --ipv4,--ether --vlan --ipv6,--ether --vlan --ipv4 --tcp,--ether --vlan --ipv6 --tcp,--ether --vxlan --ipv4 --udp,--ether --gre --ipv4,--ether --gre --ipv4 --udp,--ether --gre --ipv4 --tcp,--ether --geneve --ipv4 --udp}
+// ACTION_OPS={--queue}
+
+// Matches: All -- Actions: All
+// MATCH_OPS={--ether,--ether --vlan,--ether --vlan --ipv4,--ether --vlan --ipv6,--ether --vlan --ipv4 --tcp,--ether --vlan --ipv6 --tcp,--ether --vxlan --ipv4 --udp,--ether --gre --ipv4,--ether --gre --ipv4 --udp,--ether --gre --ipv4 --tcp,--ether --geneve --ipv4 --udp,--ether --ipv4 --meta,--ether --ipv4 --tcp --meta,--ether --ipv4 --tag,--ether --ipv4 --tcp --tag}
+// ACTION_OPS={--drop,--jump,--rss,--queue,--hairpin-rss=1,--hairpin-queue=1,--mark --queue,--count --queue,--set-meta --queue,--set-tag --queue,--mark --count --queue,--mark --count --set-meta --queue,--mark --count --set-meta --set-tag --queue}
+
+limit-batch-win:BATCH=similar
+-limit-batch-win:BATCH=10pc
+
+%late_variables
+
+// Flow perf test binary
+FLOW_PERF_EXEC=EXPAND(${DPDK_REPO}/build/app/dpdk-test-flow-perf)
+
+// Flow perf test output
+FLOW_PERF_OUT=EXPAND(${DPDK_REPO}/build/app/perf-out)
+
+// PCI express ID of the target NIC
+TARGET_NIC_PCI=EXPAND(${dut:${TARGET_NIC_PORT}:pci})
+
+intel-82599:LABEL="10 GbE Intel 82599 ES"
+intel-xl710:LABEL="40 GbE Intel XL710"
+mlnx-cx4:LABEL="100 GbE Mellanox CX-4"
+mlnx-cx5:LABEL="100 GbE Mellanox CX-5"
+mlnx-cx6:LABEL="200 GbE Mellanox CX-6"
+mlnx-bf1:LABEL="100 GbE Mellanox Bluefield"
+
+// Rule batch window according to the selected group
+limit-batch-win:FLOW_RULES_BATCH=EXPAND(${FLOW_RULES_NB})
+//-limit-batch-win:FLOW_RULES_BATCH=EXPAND(${DEFAULT_FLOW_RULES_BATCH})
+-limit-batch-win:FLOW_RULES_BATCH=EXPAND($(( int(${FLOW_RULES_NB} / 10) )) )
+
+
+
+%config
+timeout=6000
+
+var_names={FLOW_RULES_NB:Number of NIC rules,INSERTION-RATE:Flow insertion rate,DELETION-RATE:Flow deletion rate}
+
+var_unit={FLOW_RULES_NB:Number,INSERTION-RATE:kflows/sec,DELETION-RATE:kflows/sec}
+
+var_format={FLOW_RULES_NB:%d,INSERTION-RATE:%.1f,DELETION-RATE:%.1f}
+
+var_divider={INSERTION-RATE:1000,DELETION-RATE:1000}
+
+result_add={REHASH}
+
+//--------------------------------- Beginning of flow-perf test -------------------------------
+// Start DPDK'd flow-perf
+%script@dut sudo=true autokill=false name=flow-perf
+bash rule-inst-test.sh
+
+%file@dut rule-inst-test.sh
+#!/bin/bash
+print_error()
+{
+    echo "RESULT-INSERTION-RATE -1"
+    echo "RESULT-DELETION-RATE -1"
+    echo "RESULT-UPDATE-RATE -1"
+    echo "RESULT-UPDATE-ATOMIC-RATE -1"
+    echo "RESULT-INSERTION-TIME -1"
+    echo "RESULT-DELETION-TIME -1"
+    echo "RESULT-UPDATE-TIME -1"
+    echo "RESULT-UPDATE-ATOMIC-TIME -1"
+
+    exit 1
+}
+
+if [[ ! -f $FLOW_PERF_EXEC ]]; then
+    echo "Please compile DPDK v20.08 or higher and make sure FLOW_PERF_EXEC variable is set correctly."
+    exit 0
+else
+    echo "           Flow-perf at: "${FLOW_PERF_EXEC}
+fi
+
+echo "               NIC Type: "${LABEL}
+echo "               NIC port: "${TARGET_NIC_PORT}
+echo "               NIC  PCI: "${TARGET_NIC_PCI}
+echo " Flow rules'     number: "${FLOW_RULES_NB}
+echo " Flow rules'      batch: "${FLOW_RULES_BATCH}
+echo " Flow rules'      group: "${FLOW_GROUP_NB}
+echo " Flow rules'  attribute: "${FLOW_DIRECTION_ATTR}
+echo " Flow rules'  match ops: "${MATCH_OPS}
+echo " Flow rules' action ops: "${ACTION_OPS}
+echo " Flow-perf       output: "${FLOW_PERF_OUT}
+
+echo "EVENT BEGIN"
+LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
+export LD_LIBRARY_PATH
+${FLOW_PERF_EXEC} -l 0-${CPU_INDEX} -w ${TARGET_NIC_PCI} -- --deletion-rate --update-rate $(("--update-atomic" if $ATOMIC else "")) --rules-count=${FLOW_RULES_NB} --rules-batch=${FLOW_RULES_BATCH} --group=${FLOW_GROUP_NB} --${FLOW_DIRECTION_ATTR} ${MATCH_OPS} ${ACTION_OPS} | tee ${FLOW_PERF_OUT} 2>&1
+
+# Parse the output
+INSERTION_RATE=$(cat $FLOW_PERF_OUT | grep "Total flow insertion rate" | cut -d ">" -f 2 | xargs | cut -d " " -f 1)
+INSERTION_TIME=$(cat $FLOW_PERF_OUT | grep "The time for creating" | cut -d " " -f 9)
+if [[ $? != 0 ]]; then
+    print_error
+fi
+DELETION_RATE=$(cat $FLOW_PERF_OUT | grep "Total flow deletion rate" | cut -d ">" -f 2 | xargs | cut -d " " -f 1)
+DELETION_TIME=$(cat $FLOW_PERF_OUT | grep "The time for deleting" | cut -d " " -f 9)
+if [[ $? != 0 ]]; then
+    print_error
+fi
+UPDATE_ATOMIC_RATE=$(cat $FLOW_PERF_OUT | grep "Total flow update rate" | cut -d ">" -f 2 | xargs | cut -d " " -f 1)
+UPDATE_ATOMIC_TIME=$(cat $FLOW_PERF_OUT | grep "The time for updating" | cut -d " " -f 8)
+if [[ $? != 0 ]]; then
+    print_error
+fi
+
+
+# Convert the parsed rates into numbers
+INSERTION_RATE_KILO=$(bc -l <<<"$INSERTION_RATE*1000")
+DELETION_RATE_KILO=$(bc -l <<<"$DELETION_RATE*1000")
+UPDATE_ATOMIC_RATE_KILO=$(bc -l <<<"$UPDATE_ATOMIC_RATE*1000")
+
+# Currently to update a rule, one has to delete and re-insert
+UPDATE_TIME=$(python -c "print $INSERTION_TIME+$DELETION_TIME")
+UPDATE_RATE_KILO=$(python -c "print ($FLOW_RULES_NB / $UPDATE_TIME)")
+
+# Show them to NPF
+echo "RESULT-INSERTION-RATE "$INSERTION_RATE_KILO
+echo "RESULT-DELETION-RATE "$DELETION_RATE_KILO
+//echo "RESULT-UPDATE-RATE "$UPDATE_RATE_KILO
+echo "RESULT-UPDATE-RATE "$UPDATE_ATOMIC_RATE_KILO
+
+echo "RESULT-INSERTION-TIME "$INSERTION_TIME
+echo "RESULT-DELETION-TIME "$DELETION_TIME
+//echo "RESULT-UPDATE-TIME "$UPDATE_TIME
+echo "RESULT-UPDATE-TIME "$UPDATE_ATOMIC_TIME
+
+# Notify potential modules of interest
+echo "EVENT END"
+
+# Remove output file
+rm -rf $FLOW_PERF_OUT
+
+exit 0
+//------------------------------------ End of flow-perf test ----------------------------------

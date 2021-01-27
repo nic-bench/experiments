@@ -1,0 +1,101 @@
+%info
+Study of the table occupancy with packets : Figures 2
+
+%config
+timeout=600
+//var_divider={PC:0.01}
+results_expect={THROUGHPUT}
+result_add={REHASH}
+accept_zero={MPC,MATCH}
+var_names={THROUGHPUT:Throughput (Gbps),NRULES:# of rules in Table 1 of a 100 GbE Mellanox ConnectX-5 NIC,NFLOWS:Number of flows}
+var_divider={THROUGHPUT:1000000000,NRULES:1000,NFLOWS:1000}
+var_format={THROUGHPUT:%d,NRULES:%dk,NFLOWS:%dk}
+var_unit={THROUGHPUT: }
+//graph_markers={s}
+graph_colors={2,4,5,3}
+//rstep:var_log={NRULES}
+graph_tick_params={direction:in,which:both,axis:both,grid_linestyle:dotted,bottom:true,top:true,right:true,left:true,grid_color:#444444}
+var_grid=true
+graph_fillstyle=none
+graph_legend_params={fancybox:0,edgecolor:black,framealpha:1.0}
+
+
+%variables
+NRULES=1000000
+
+small:NRULES={1000,16000,32000,56000,57000,58000,59000,60000,61000,62000,63000,64000,65000,65536}
+mstep:NRULES={0,10000,20000,30000,40000,50000,60000,70000,80000,90000,100000,1000000,2000000,3000000,4000000}
+rstep:NRULES={0,100000,200000,300000,400000,500000,600000,700000,800000,900000,1000000,2000000,3000000,4000000}
+large:NRULES=[0-4000000#1000000]
+vlarge:NRULES=[0-6000000#1000000]
+NFLOWS=65536
+PC=0.01
+pcstep:PC={0,0.000001,0.0001,0.001,0.01,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1}
+CPU=1
+THRESH=1000
+LIMIT_TIME=10
+SOCKET?=0
+
+cascade:GEN_THREADS=4
+cascade:SERVER=m15
+
+%late_variables
+DO_CC?=0
+BURST?=32
+
+%include gen.npf
+%import@client fastclick-play-single-mt trace=ip.dump PKTGEN_REPLAY_COUNT=1000 SAMPLE=100 waitfor=FWREADY GEN_PIPELINE=0 GEN_DUMP=1
+
+//%script@client sudo=true waitfor=FWREADY delay=2
+//p=$(pwd)
+//cd ~/workspace/fastclick-conntrack
+//userlevel/click --dpdk -l 0-3 -- CONFIG dump=$p/ip.dump time=0 print=0 ETH_DST=${dut:0:mac}
+
+%sendfile@client gen_flows.py
+
+%script@dut sudo=true waitfor=FL_DONE
+p=$(pwd)
+killall -9 click
+sleep 5
+LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
+cd ${NICBENCH_PATH}
+cores=$(lscpu | grep "NUMA node${DUTSOCKET}" | rev | cut -d ' ' -f 1 | rev)
+sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix tom -a ${dut:0:pci} -m 8192M -l $cores -- $p/forwarder.click
+
+%file@dut forwarder.click
+fd0 :: FromDPDKDevice(0,FLOW_ISOLATE false, IPCO false, TCO false, VERBOSE 99, MINQUEUES 2, PAINT_QUEUE true, FLOW_RULES_FILE $RULE_FILE, MODE flow, TIMESTAMP ${DO_CC}, BURST $BURST, PAUSE none, MAXTHREADS 1)
+$((  "  -> TSCClock(SOURCE fd0, INSTALL false) -> acc :: TimestampAccum " if $DO_CC else "" ))
+//    -> Print(FD)
+    -> PaintSwitch [0-1]=>[0-1] c :: { [0] -> c0 :: Counter -> [0]; [1] -> c1 :: Counter -> [0]; }
+    -> EtherMirror
+/*    -> MarkIPHeader(OFFSET 14)
+    -> IPPrint*/
+    -> avg :: AverageCounterIMP(IGNORE 1, THRESHOLD $THRESH)
+    $(( "-> pcc :: TimestampAccum " if $DO_CC else "" ))
+
+    -> ToDPDKDevice(0, BLOCKING false);
+
+DriverManager(print "EVENT FWREADY", wait, print "RESULT-DUT_THROUGHPUT $(avg.link_rate)",
+            print "RESULT-MATCH $(c/c1.count)",
+            print "RESULT-MISS $(c/c0.count)",
+            print "RESULT-MPC $(div $(mul $(c/c1.count) 100) $(add $(c/c0.count) $(c/c1.count)))",
+            print "RESULT-ACC $(acc.average_time)",
+            print "RESULT-TPCC $(pcc.average_time)",
+            print "RESULT-PCC $(sub $(pcc.average_time) $(acc.average_time))",
+            read fd0.xstats,
+);
+
+Script(TYPE ACTIVE,
+            wait 2s,
+            label loop,
+            set time $(now),
+//            print "NF-$time-RESULT-NUMFLOWS $(ruleInstaller.flow_count fd0 whatever)",
+            print "NF-$time-RESULT-MATCH $(c/c1.count)",
+            print "NF-$time-RESULT-MISS $(c/c0.count)",
+            print "NF-$time-RESULT-MPC $(div $(mul $(c/c1.count) 100) $(add $(c/c0.count) $(c/c1.count)))",
+            wait 1s,
+            goto loop)
+
+StaticThreadSched(fd0 0);
+
+%import graph-beautiful
