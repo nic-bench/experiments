@@ -15,9 +15,9 @@ all: cx4 cx5 cx6 bf1
 	#Figure 4
 	NICABR=$@ ./run_update_burst.sh
 	#Figure 5
-	#./run-rule-inst.sh $@ 0 S IPComp yes
-	#./run-rule-inst.sh $@ 1 S IPComp yes
-	#./run-rule-inst.sh $@ 1 S Tunnels yes
-	#./run-rule-inst.sh $@ 1 S Action yes
+	./run-rule-inst.sh $@ 0 S IPComp yes
+	./run-rule-inst.sh $@ 1 S IPComp yes
+	./run-rule-inst.sh $@ 1 S Tunnels yes
+	./run-rule-inst.sh $@ 1 S Action yes
 	#Figure 6
 	NICABR=$@ ./run_update_atomic_rate.sh

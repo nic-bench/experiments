@@ -1,5 +1,8 @@
 %info
-Study of the table occupancy with packets : Figures 2
+Study of the table occupancy with packets : Figures 2. I.e. the decrease
+of throughput of latency according to the number of rules installed, and
+the number of tables used.
+Also modified now to see the influence of the number of flows in the input traffic.
 
 %config
 timeout=600
@@ -28,16 +31,29 @@ mstep:NRULES={0,10000,20000,30000,40000,50000,60000,70000,80000,90000,100000,100
 rstep:NRULES={0,100000,200000,300000,400000,500000,600000,700000,800000,900000,1000000,2000000,3000000,4000000}
 large:NRULES=[0-4000000#1000000]
 vlarge:NRULES=[0-6000000#1000000]
+e810:NRULES={1000,2000,3000,5000,8000,10000,11000,12000,14000,15000,15300,15359}
 NFLOWS=65536
 PC=0.01
+pcten:PC=[0-1#0.1]
 pcstep:PC={0,0.000001,0.0001,0.001,0.01,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1}
 CPU=1
 THRESH=1000
 LIMIT_TIME=10
 SOCKET?=0
+PAUSE?=none
 
 cascade:GEN_THREADS=4
 cascade:SERVER=m15
+
+// File prefixes to avoid intereferences
+PREFIX=tom
+massimo:PREFIX=massimo
+PIPELINE_SUPPORT=0
+pipeline,e810:PIPELINE_SUPPORT=1
+
+// Skip match results -> Print them but not as actual  NPF results
+NOMATCHRESULTS=0
+nomatchresults:NOMATCHRESULTS=1
 
 %late_variables
 DO_CC?=0
@@ -52,18 +68,28 @@ BURST?=32
 //userlevel/click --dpdk -l 0-3 -- CONFIG dump=$p/ip.dump time=0 print=0 ETH_DST=${dut:0:mac}
 
 %sendfile@client gen_flows.py
+%sendfile@client kill_user_processes.py
 
 %script@dut sudo=true waitfor=FL_DONE
 p=$(pwd)
-killall -9 click
+#killall -9 click
+sudo python3 ${NPF_TESTIE_PATH}/kill_user_processes.py --signal 9 --process click --user ${PREFIX}
+sudo rm -rf /dev/hugepages/${PREFIX}map_*
 sleep 5
-LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
+$(( "#" if "$PREFIX"=="massimo" else "")) LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
+$(( "" if "$PREFIX"=="massimo" else "#")) LD_LIBRARY_PATH=/home/massimo/prj/nic-bench-experiments/rdma-core/install/usr/local/lib/:/home/massimo/prj/nic-bench-experiments/libbpf/src/:/home/massimo/prj/nic-bench-experiments/hyperscan/build/lib
+$(( "#" if "$USE_UPSTREAM_DPDK" == 1 else "")) LD_LIBRARY_PATH=""
+
 cd ${NICBENCH_PATH}
 cores=$(lscpu | grep "NUMA node${DUTSOCKET}" | rev | cut -d ' ' -f 1 | rev)
-sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix tom -a ${dut:0:pci} -m 8192M -l $cores -- $p/forwarder.click
+echo sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix $PREFIX -a ${dut:0:pci}$(( ",pipeline-mode-support=1" if $PIPELINE_SUPPORT and "$MODEL" == "E810" else "")) -m 8192M -l $cores -- $p/forwarder.click
+sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix $PREFIX -a ${dut:0:pci}$(( ",pipeline-mode-support=1" if $PIPELINE_SUPPORT and "$MODEL" == "E810" else "")) -m 8192M -l $cores -- $p/forwarder.click
 
 %file@dut forwarder.click
-fd0 :: FromDPDKDevice(0,FLOW_ISOLATE false, IPCO false, TCO false, VERBOSE 99, MINQUEUES 2, PAINT_QUEUE true, FLOW_RULES_FILE $RULE_FILE, MODE flow, TIMESTAMP ${DO_CC}, BURST $BURST, PAUSE none, MAXTHREADS 1)
+fd0 :: FromDPDKDevice(0,FLOW_ISOLATE false, IPCO false, TCO false, VERBOSE 99, MINQUEUES 2, PAINT_QUEUE true, FLOW_RULES_FILE $RULE_FILE, MODE flow, TIMESTAMP ${DO_CC}, BURST $BURST,
+	// TODO: Temporary fix for e8101. unset was not implemented in fromdpdkdevice parser
+	$(( "//" if "$MODEL" == "E810" else "" )) PAUSE $PAUSE,
+	MAXTHREADS 1)
 $((  "  -> TSCClock(SOURCE fd0, INSTALL false) -> acc :: TimestampAccum " if $DO_CC else "" ))
 //    -> Print(FD)
     -> PaintSwitch [0-1]=>[0-1] c :: { [0] -> c0 :: Counter -> [0]; [1] -> c1 :: Counter -> [0]; }
@@ -89,10 +115,11 @@ Script(TYPE ACTIVE,
             wait 2s,
             label loop,
             set time $(now),
+	    set RESULT $(("RESULT" if "$NOMATCHRESULTS"== "0" else "RES")),
 //            print "NF-$time-RESULT-NUMFLOWS $(ruleInstaller.flow_count fd0 whatever)",
-            print "NF-$time-RESULT-MATCH $(c/c1.count)",
-            print "NF-$time-RESULT-MISS $(c/c0.count)",
-            print "NF-$time-RESULT-MPC $(div $(mul $(c/c1.count) 100) $(add $(c/c0.count) $(c/c1.count)))",
+            print "NF-$time-$RESULT-MATCH $(c/c1.count)",
+            print "NF-$time-$RESULT-MISS $(c/c0.count)",
+            print "NF-$time-$RESULT-MPC $(div $(mul $(c/c1.count) 100) $(add $(c/c0.count) $(c/c1.count)))",
             wait 1s,
             goto loop)
 

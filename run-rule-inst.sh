@@ -22,11 +22,11 @@ RULESET_SIZE=${3:-S}
 SCENARIO=${4:-Match}
 FORCE_RETEST=${5:-no}
 
-SYSTEMS=("82599" "xl710" "cx4" "cx5" "cx6" "bf1")
-SCENARIOS=("Match" "Action" "IPComp" "Slicing")
+SYSTEMS=("82599" "xl710" "cx4" "cx5" "cx6" "bf1" "e810")
+SCENARIOS=("Match" "Action" "IPComp" "Slicing" "IntelAction" "IntelMatch")
 
 CUR_PATH=$(pwd)
-TESTIE_PATH=$(pwd)/nic-rule-inst-bench.testie
+TESTIE_PATH=$(pwd)/nic-rule-inst-bench.npf
 
 COMMAND=""
 DUT=""
@@ -44,7 +44,7 @@ ITERATIONS_NB=3
 
 usage()
 {
-	echo "Usage: "${PROGRAM}" <NIC-Model (82599/xl710/cx4/cx5/cx6/bf1)> <Group No (>=0)> <Ruleset Size (S/L)> <Scenario (Match/Action/IPComp/Tunnels)> <Force retest (yes/no)>"
+	echo "Usage: "${PROGRAM}" <NIC-Model (82599/xl710/cx4/cx5/cx6/bf1/e810)> <Group No (>=0)> <Ruleset Size (S/L)> <Scenario (Match/Action/IPComp/Tunnels/IntelAction/IntelMatch)> <Force retest (yes/no)>"
 	exit $ERROR
 }
 
@@ -76,7 +76,7 @@ check_input()
 		EXTRA_TAG="limit-batch-win"
 	fi
 
-	if [[ ! $RULESET_SIZE =~ ^(S|L)$ ]]; then
+	if [[ ! $RULESET_SIZE =~ ^(S|L|M)$ ]]; then
 		echo "NIC ruleset size must be either S (Small) or L (Large)"
 		usage
 	fi
@@ -99,9 +99,23 @@ check_input()
 		ACTION_OPS="{--queue,--mark --queue,--mark --set-meta --queue,--mark --set-meta --set-tag --queue}"
 		SCENARIO_LABEL="inc-action"
 	fi
+	if [[ $SCENARIO =~ ^(intelaction|IntelAction|INTELACTION)$ ]]; then
+		MATCH_OPS="{--ether --ipv4}"
+		ACTION_OPS="{--queue,--mark --queue,--count --queue,--mark --count --queue, --drop, --mark --drop, --count --drop, --mark --count --drop}"
+		SCENARIO_LABEL="inc-intel-action"
+	fi
+	if [[ $SCENARIO =~ ^(intelmatch|IntelMatch|INTELMATCH)$ ]]; then
+		MATCH_OPS="{--ether --ipv4, --ether --ipv6, --ether --vlan, --ether --ipv4 --udp --gtpu, --ether --ipv6 --udp --gtpu, --ether --ipv4 --tcp, --ether --ipv6 --tcp, --ether --ipv4 --udp, --ether --ipv6 --udp, --eth --pppoes, --eth --ipv4 --ah, --eth --ipv6 --ah, --eth --ipv4 --esp, --eth --ipv6 --esp, --eth --ipv4 --l2tpv3oip, --eth --ipv6 --l2tpv3oip}"
+		ACTION_OPS="{--queue}"
+		SCENARIO_LABEL="inc-intel-match"
+	fi
 
 	if [[ $SCENARIO =~ ^(ipcomp|IpComp|IPComp|IPCOMP)$ ]]; then
-		MATCH_OPS="{--ether,--ether --ipv4,--ether --ipv6,--ether --ipv4 --tcp,--ether --ipv6 --tcp}"
+		if [[ $NICABR != "e810" ]]; then
+			MATCH_OPS="{--ether,--ether --ipv4,--ether --ipv6,--ether --ipv4 --tcp,--ether --ipv6 --tcp}"
+		else
+			MATCH_OPS="{--ether --ipv4,--ether --ipv6,--ether --ipv4 --tcp,--ether --ipv6 --tcp}"
+		fi
 		ACTION_OPS="{--queue}"
 		SCENARIO_LABEL="ipv4-vs-ipv6"
 	fi
@@ -228,9 +242,27 @@ compose_rule_inst_mlnx_bf1()
 	fi
 }
 
+compose_rule_inst_intel_e810()
+{
+	DUT="nslrack11-100G,nic=6"
+	NIC_VENDOR="intel"
+	NIC_MODEL="e810"
+
+	if [[ $NIC_GROUP -ne 0 ]]; then
+		echo "This NIC provides only a single flow rule table"
+		usage
+	fi
+
+	if [[ $RULESET_SIZE == "S" ]]; then
+		RULES_NB="{2,10,20,30,40,50,60,70,80,90,100,128}"
+	else
+		RULES_NB="{2,10,20,30,40,50,60,70,80,90,100,128,140,160,180,200,220,240,250,256,1000,2000,3000,4000,5000,6000,7000,8000,9000,10000,11000,12000,13000,14000,15000,15360}"
+	fi
+}
+
 compose_out_file()
 {
-	OUT_FILE="rule-inst-bench-${HW_ARCH}-${NIC_VENDOR}-${NIC_MODEL}-set-${RULESET_LABEL}-group-${NIC_GROUP}-scenario-${SCENARIO_LABEL}.csv"
+    OUT_FILE="graphs/mlnx-${NICABR}/${HW_ARCH}/rule-inst-bench/rule-inst-bench-${HW_ARCH}-${NIC_VENDOR}-${NIC_MODEL}-set-${RULESET_LABEL}-group-${NIC_GROUP}-scenario-${SCENARIO_LABEL}.csv"
 }
 
 print_configuration()
@@ -252,14 +284,15 @@ compose_cmd()
     COMMAND="npf-compare \
 		local+nic-rule-inst-bench:${NIC_MODEL}-G${NIC_GROUP}-${RULESET_SIZE}-${SCENARIO_LABEL} \
 		--testie $TESTIE_PATH --cluster dut=${DUT} \
-		--tags ${NIC_VENDOR}-${NIC_MODEL} ${EXTRA_TAG} \
+		--tags $USER ${NIC_VENDOR}-${NIC_MODEL} ${EXTRA_TAG} \
 		--variables TARGET_NIC_PORT=0 FLOW_RULES_NB=\"${RULES_NB}\" \
 		FLOW_GROUP_NB=${NIC_GROUP} \
 		MATCH_OPS=\"${MATCH_OPS}\" \
 		ACTION_OPS=\"${ACTION_OPS}\" \
 		--output ${OUT_FILE} \
 		--output-columns x perc1 perc25 median perc75 perc99 avg \
-		--show-cmd --show-full --config n_runs=$ITERATIONS_NB $FORCE_RETEST"
+        --graph-filename tempgraphs/${NICABR}/fig5-${NIC_GROUP}-${SCENARIO_LABEL}/.svg \
+		--show-cmd --show-full --config n_runs=$ITERATIONS_NB $FORCE_RETEST ${PARAMS}"
 
 	echo ""
 	echo $COMMAND
@@ -281,12 +314,13 @@ elif [[ $SYSTEM == "cx6" ]]; then
 	compose_rule_inst_mlnx_cx6
 elif [[ $SYSTEM == "bf1" ]]; then
 	compose_rule_inst_mlnx_bf1
+elif [[ $SYSTEM == "e810" ]]; then
+	compose_rule_inst_intel_e810
 fi
 compose_out_file
 
 print_configuration
 compose_cmd
 
-leave_npf
 
 exit 0

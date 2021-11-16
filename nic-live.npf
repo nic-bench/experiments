@@ -1,11 +1,12 @@
 %info
-Scripts playing traffic while playing with trace: Figure 3, 4 and 6
+Scripts playing traffic while inserting rules (batch or burst) : Figure 3, 4 and 6
 
 %config
 timeout=100
 result_add={REHASH}
 results_expect={DUT_THROUGHPUT}
 prate:results_expect+={LATENCY}
+time_precision=2
 
 %variables
 PKTGEN_REPLAY_COUNT=250
@@ -16,7 +17,9 @@ simple:RPS=[1-40000#2000]
 CPU=[0-1]
 -dump,-simple,-batch:RPS=[0-10000#1000]
 high,-dump,-simple,-batch:RPS={10000,20000,30000,40000,50000,60000,70000,80000,90000,100000,200000,300000,400000,500000}
-batch:RULES={1,1000,2000,3000,4000,5000,6000,7000,8000,9000,10000,20000,30000,40000,50000,60000,70000,80000,90000,100000}
+//batch:RULES={1,1000,2000,3000,4000,5000,6000,7000,8000,9000,10000,20000,30000,40000,50000,60000,70000,80000,90000,100000}
+batch:RULES={1,1000,10000,100000}
+batch,e810:RULES={1,1000,2000,4000,8000,15000,15350,15350}
 batch:PERIOD=0
 MASK=255.255.255.255
 dump:PERIOD=0
@@ -25,6 +28,15 @@ rps:PREWAIT=0
 simple:PREWAIT=10
 prate:TIMING_FNT=600
 prate:GEN_BLOCKING=false
+
+PREFIX=tom
+massimo:PREFIX=massimo
+PIPELINE_SUPPORT=0
+e810,pipeline:PIPELINE_SUPPORT=1
+PAUSE=none
+e810:PAUSE=unset
+
+DUTSOCKET=0
 
 %late_variables
 simple:UPD?=0
@@ -43,32 +55,39 @@ TABLE?=1
 %batch|rps:script@dut sudo=true
 tpath=$(realpath ${NPF_TESTIE_PATH})
 echo "RPS $RPS, Freq $FREQ, RULES per RPS $RULES, PERIOD $PERIOD"
-killall -9 click
+#killall -9 click
+sudo python3 ${NPF_TESTIE_PATH}/kill_user_processes.py --signal 9 --process click --user ${PREFIX}
 sleep 5
 LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
 cd ${NICBENCH_PATH}
-sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix tom -w ${dut:0:pci} -m 8192M -l 0-2 -- $tpath/forwarder.click period=$PERIOD verbosity=0 coreNb=$CPU rulesNb=$RULES table=$TABLE mask=$MASK prewait=$PREWAIT
 
-%update:script@dut sudo=true
-echo "RPS $RPS, Freq $FREQ, RULES per RPS $RULES, PERIOD $PERIOD"
-killall -9 click
-sleep 5
-LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
-cd ${NICBENCH_PATH}
-sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix tom -w ${dut:0:pci} -m 8192M -l 0-$CPU -- FWD-U period=$PERIOD verbosity=0 coreNb=$CPU rulesNb=$RULES table=$TABLE mask=$MASK
+cores=$(lscpu | grep "NUMA node${DUTSOCKET}" | rev | cut -d ' ' -f 1 | rev)
+sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix $PREFIX -w ${dut:0:pci}$(( ",pipeline-mode-support=1" if $PIPELINE_SUPPORT and "$MODEL" == "E810" else "" )) -m 8192M -l $cores -- $tpath/forwarder.click period=$PERIOD verbosity=0 coreNb=$CPU rulesNb=$RULES table=$TABLE mask=$MASK prewait=$PREWAIT
+
+//%update:script@dut sudo=true
+//echo "RPS $RPS, Freq $FREQ, RULES per RPS $RULES, PERIOD $PERIOD"
+//killall -9 click
+//sleep 5
+//LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
+//cd ${NICBENCH_PATH}
+//sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix tom -w ${dut:0:pci} -m 8192M -l 0-$CPU -- FWD-U period=$PERIOD verbosity=0 coreNb=$CPU rulesNb=$RULES table=$TABLE mask=$MASK
 
 %simple:script@dut sudo=true
 tpath=$(realpath $(pwd))
 LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
 cd ${NICBENCH_PATH}
-sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix tom -w ${dut:0:pci} -l 0-2 -- ${tpath}/updater.click period=$(( float($PERIOD) / 1000000)) rulesNb=$RULES coreNb=$CPU prewait=$PREWAIT
+cores=$(lscpu | grep "NUMA node${DUTSOCKET}" | rev | cut -d ' ' -f 1 | rev)
+sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix ${PREFIX} -w ${dut:0:pci}$(( ",pipeline-mode-support=1" if $PIPELINE_SUPPORT and "$MODEL" == "E810" else "" ))  -l ${cores} -- ${tpath}/updater.click period=$(( float($PERIOD) / 1000000)) rulesNb=$RULES coreNb=$CPU prewait=$PREWAIT
 
 %bath|rps:sendfile@dut forwarder.click
 
 %simple:file@dut updater.click
 define($dut_iteration_time 1)
 
-fd0 :: FromDPDKDevice(0,FLOW_ISOLATE false, IPCO false, TCO false, VERBOSE 99, PROMISC true)
+fd0 :: FromDPDKDevice(0,FLOW_ISOLATE false, IPCO false, TCO false, VERBOSE 99, PROMISC true,
+	// Temporary fix: unset not implemented
+	$(( "//" if "$MODEL" == "E810" else "" )) PAUSE $PAUSE
+	)
  //   -> Print(FD)
     -> avg :: AverageCounter(IGNORE 1, THRESHOLD 1000)
     -> EtherMirror

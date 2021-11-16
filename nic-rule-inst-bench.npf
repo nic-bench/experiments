@@ -19,10 +19,15 @@ We chose a dual-socket 16-core Intel Xeon Gold 6134 (Skylake) and the DPDK v20.0
 
 %variables
 
-ATOMIC={0,1}
+ATOMIC=0
+atomic:ATOMIC={0,1}
 
 // The location of the DPDK repo
 DPDK_REPO=/home/tom/workspace/dpdk-updated/
+intel-e810:DPDK_REPO=/home/massimo/prj/nic-bench-experiments/dpdk-updated/
+E810=0
+intel-e810:E810=1
+
 
 // The PCI address of the Target NIC port
 TARGET_NIC_PORT=0
@@ -47,6 +52,7 @@ CPU_INDEX=$(( $CPU_CORES - 1 ))
 // Various combinations of match-action operations
 // Matches: 1 -- Actions: 1-4
 MATCH_OPS={--ether}
+
 ACTION_OPS={--queue,--mark --queue,--mark --set-meta --queue,--mark --set-meta --set-tag --queue}
 
 // Matches: 1-4 -- Actions: 1
@@ -78,9 +84,12 @@ FLOW_PERF_OUT=EXPAND(${DPDK_REPO}/build/app/perf-out)
 
 // PCI express ID of the target NIC
 TARGET_NIC_PCI=EXPAND(${dut:${TARGET_NIC_PORT}:pci})
+// For the e810, we need the pipeline support mode set to 1...
+//intel-e810:TARGET_NIC_PCI=EXPAND(${dut:${TARGET_NIC_PORT}:pci},pipeline-mode-support=1)
 
 intel-82599:LABEL="10 GbE Intel 82599 ES"
 intel-xl710:LABEL="40 GbE Intel XL710"
+intel-e810:LABEL="100 GbE Intel e810"
 mlnx-cx4:LABEL="100 GbE Mellanox CX-4"
 mlnx-cx5:LABEL="100 GbE Mellanox CX-5"
 mlnx-cx6:LABEL="200 GbE Mellanox CX-6"
@@ -91,6 +100,8 @@ limit-batch-win:FLOW_RULES_BATCH=EXPAND(${FLOW_RULES_NB})
 //-limit-batch-win:FLOW_RULES_BATCH=EXPAND(${DEFAULT_FLOW_RULES_BATCH})
 -limit-batch-win:FLOW_RULES_BATCH=EXPAND($(( int(${FLOW_RULES_NB} / 10) )) )
 
+ADDITIONAL_PARAMS=
+intel-e810:ADDITIONAL_PARAMS=--disable-fdir-config --rss-flags=0x14
 
 
 %config
@@ -118,11 +129,9 @@ print_error()
     echo "RESULT-INSERTION-RATE -1"
     echo "RESULT-DELETION-RATE -1"
     echo "RESULT-UPDATE-RATE -1"
-    echo "RESULT-UPDATE-ATOMIC-RATE -1"
     echo "RESULT-INSERTION-TIME -1"
     echo "RESULT-DELETION-TIME -1"
     echo "RESULT-UPDATE-TIME -1"
-    echo "RESULT-UPDATE-ATOMIC-TIME -1"
 
     exit 1
 }
@@ -146,9 +155,10 @@ echo " Flow rules' action ops: "${ACTION_OPS}
 echo " Flow-perf       output: "${FLOW_PERF_OUT}
 
 echo "EVENT BEGIN"
+#set -o xtrace
 LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
-export LD_LIBRARY_PATH
-${FLOW_PERF_EXEC} -l 0-${CPU_INDEX} -w ${TARGET_NIC_PCI} -- --deletion-rate --update-rate $(("--update-atomic" if $ATOMIC else "")) --rules-count=${FLOW_RULES_NB} --rules-batch=${FLOW_RULES_BATCH} --group=${FLOW_GROUP_NB} --${FLOW_DIRECTION_ATTR} ${MATCH_OPS} ${ACTION_OPS} | tee ${FLOW_PERF_OUT} 2>&1
+$(("#" if $E810 else ""))  export LD_LIBRARY_PATH
+${FLOW_PERF_EXEC} -l 0-${CPU_INDEX} -w ${TARGET_NIC_PCI} -- --deletion-rate --update-rate $(("--update-atomic" if $ATOMIC else "")) --rules-batch=${FLOW_RULES_BATCH} --rules-count=${FLOW_RULES_NB}  --group=${FLOW_GROUP_NB} --${FLOW_DIRECTION_ATTR} ${MATCH_OPS} ${ACTION_OPS} ${ADDITIONAL_PARAMS} | tee ${FLOW_PERF_OUT} 2>&1
 
 # Parse the output
 INSERTION_RATE=$(cat $FLOW_PERF_OUT | grep "Total flow insertion rate" | cut -d ">" -f 2 | xargs | cut -d " " -f 1)
@@ -180,12 +190,10 @@ UPDATE_RATE_KILO=$(python -c "print ($FLOW_RULES_NB / $UPDATE_TIME)")
 # Show them to NPF
 echo "RESULT-INSERTION-RATE "$INSERTION_RATE_KILO
 echo "RESULT-DELETION-RATE "$DELETION_RATE_KILO
-//echo "RESULT-UPDATE-RATE "$UPDATE_RATE_KILO
 echo "RESULT-UPDATE-RATE "$UPDATE_ATOMIC_RATE_KILO
 
 echo "RESULT-INSERTION-TIME "$INSERTION_TIME
 echo "RESULT-DELETION-TIME "$DELETION_TIME
-//echo "RESULT-UPDATE-TIME "$UPDATE_TIME
 echo "RESULT-UPDATE-TIME "$UPDATE_ATOMIC_TIME
 
 # Notify potential modules of interest
