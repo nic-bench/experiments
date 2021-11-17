@@ -18,10 +18,10 @@ The experiments are managed using [NPF](http://github.com/tbarbette/npf/), it wi
    ninja -C build
    sudo ninja -C build install
  ```
- * Compile our modified version of FastClick
+ * Compile FastClick (all modifications have been merged into mainline FastClick)
 
 ```
-git clone https://github.com/nic-bench/fastclick.git
+git clone https://github.com/tbarbette/fastclick.git
 cd fastclick
 ./configure --enable-dpdk --enable-intel-cpu --verbose --enable-select=poll CFLAGS="-O3" CXXFLAGS="-std=c++11 -O3"  --disable-dynamic-linking --enable-poll --enable-bound-port-transfer --enable-local --enable-flow --disable-task-stats --disable-cpu-load
 make
@@ -30,7 +30,7 @@ export NICBENCH_PATH=$(pwd)
 
 ## Running
 
-We provide a Makefile to automatically run all tests. However it is best to start with a simplified experiment to verify the setup is working:
+We provide a Makefile to automatically run all tests. However it is best to start with a simplified single experiment to verify the setup is working:
 
 ### Running a single benchmark
 
@@ -44,15 +44,25 @@ npf-compare local --test nic-occupancy.npf \
 If something is going wrong, add --show-full --show-cmd to see the commands and their output and try to solve the issue.
 
 If everything goes smoothly, at the end of the tests you will have a path to automatically generated graphs such as this one for throughput:
+
 ![Throughput for the example command](nic-occupancy-example-0.svg)
 
-The file nic-occupancy.npf contains a description of the variables that can be changed, for instance fixing the number of rules to 1000000, using table 1 instead of table 0 and using 1000 to 100000 flows in the input load can be done with `--variables NRULES=1000000 TABLE=1 NFLOWS={1000,10000,100000}`.
+Check out the NPF documentation to learn how to change axis labels, plot size, colors, etc... You can also export the data in CSV, panda matrix, ...
+
+The file nic-occupancy.npf contains a description of the variables that can be changed, for instance fixing the number of rules to 4000000, using table 1 instead of table 0 and using 1000 to 100000 flows in the input load can be done with `--variables NRULES=4000000 TABLE=1 NFLOWS={1000,10000,100000}`.
+
+
+![Throughput for the example command](nic-occupancy-example-1.svg)
+
+Similarly, one can try to check the impact of matching only a default rule (general case in tests) and matching an increasing part of the rules themselves with `--variables NFLOWS=10000 PC=[0-1#0.1]`:
+
+![Throughput for the example command](nic-occupancy-example-2.svg)
 
 
 ### Running all tests
 Set up the parameters such as the cluster's IP addresses (the machines where the NIC are installed) and the path to the modified FastClick in common.sh
 
-When it works, just type make to run all experiments. The experiments will produce automatically the files.
+Just type make to run all experiments.
 
 
 ## Results of experiments (including other NICs)
