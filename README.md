@@ -6,7 +6,7 @@ The experiments are managed using [NPF](http://github.com/tbarbette/npf/), it wi
 ## Dependencies and set-up
 
  * Install NPF and psutil with `python3 -m pip install --user npf psutil`
- * Install DPDK (see dpdk.org), or our [modified version of DPDK](http://github.com/nicbench/dpdk/) if you want to test the new update API:
+ * Install DPDK (see dpdk.org) (or our [modified version of DPDK](http://github.com/nicbench/dpdk/) if you want to test the new update API) :
  ```bash
  # Extract sources
 
@@ -41,6 +41,7 @@ npf-compare local --test nic-occupancy.npf \
     --variables PC=0 PORTS=0 PRIORITY=1 USE_UPSTREAM_DPDK=1 TABLE=0 MODEL=CX5 DUTSOCKET=0 NICBENCH_PATH=/home/tom/workspace/nicbench/ \
     --tags small nomatchresults
 ```
+The most important thing to change in the line above are the value of NICBENCH_PATH, which should be the path to the compiled FastClick above, and the --cluster command which allows to set which machine will be the client, and which one will be the dut. By default the NICs will be sorted by order of speed, which should allow to have the first NIC as the dataplane one. You can append `,nic=1` to `client=server0.mycluster.com,nic=1` to select the second NIC. The list will be printed by NPF. For finer tuning refer to the NPF documentation.
 If something is going wrong, add --show-full --show-cmd to see the commands and their output and try to solve the issue.
 
 If everything goes smoothly, at the end of the tests you will have a path to automatically generated graphs such as this one for throughput:
