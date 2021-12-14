@@ -87,11 +87,12 @@ BURST?=32
 %sendfile@client scripts/gen_flows.py
 %sendfile@client scripts/kill_user_processes.py
 
+%include common.npf
+
 //The script running stuffs on the dut
 %script@dut sudo=true waitfor=FL_DONE
 p=$(pwd)
 #killall -9 click
-sudo python3 -m pip install --user psutil
 sudo python3 ${NPF_TESTIE_PATH}/scripts/kill_user_processes.py --signal 9 --process click --user ${PREFIX}
 sudo rm -rf /dev/hugepages/${PREFIX}map_*
 sleep 5
