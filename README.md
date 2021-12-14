@@ -23,7 +23,7 @@ The experiments are managed using [NPF](http://github.com/tbarbette/npf/), it wi
 ```
 git clone https://github.com/tbarbette/fastclick.git
 cd fastclick
-./configure --enable-dpdk --enable-intel-cpu --verbose --enable-select=poll CFLAGS="-O3" CXXFLAGS="-std=c++11 -O3"  --disable-dynamic-linking --enable-poll --enable-bound-port-transfer --enable-local --enable-flow --disable-task-stats --disable-cpu-load
+./configure --enable-dpdk --enable-intel-cpu --verbose --enable-select=poll CFLAGS="-O3" CXXFLAGS="-std=c++11 -O3"  --disable-dynamic-linking --enable-poll --enable-bound-port-transfer --enable-local --enable-flow --disable-task-stats --disable-cpu-load --enable-flow-api
 make
 export NICBENCH_PATH=$(pwd)
 ```
