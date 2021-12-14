@@ -52,11 +52,15 @@ TABLE?=1
 //%import@client fastclick-play-single-mt trace=ip.dump PKTGEN_REPLAY_COUNT=1000 SAMPLE=100 waitfor=FWREADY GEN_PIPELINE=0 GEN_DUMP=1
 %-sum:import@client fastclick-replay-single-mt-timing trace=/mnt/traces/synthetic/trace-UDP-C10000-O1-F1-P1500.pcap delay=2
 
+
+%sendfile@client scripts/kill_user_processes.py
+
 %batch|rps:script@dut sudo=true
 tpath=$(realpath ${NPF_TESTIE_PATH})
 echo "RPS $RPS, Freq $FREQ, RULES per RPS $RULES, PERIOD $PERIOD"
 #killall -9 click
-sudo python3 ${NPF_TESTIE_PATH}/kill_user_processes.py --signal 9 --process click --user ${PREFIX}
+sudo python3 -m pip install --user psutil
+sudo python3 ${NPF_TESTIE_PATH}/scripts/kill_user_processes.py --signal 9 --process click --user ${PREFIX}
 sleep 5
 LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
 cd ${NICBENCH_PATH}

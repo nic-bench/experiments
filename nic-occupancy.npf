@@ -84,14 +84,15 @@ BURST?=32
 %import@client fastclick-play-single-mt trace=ip.dump PKTGEN_REPLAY_COUNT=1000 SAMPLE=100 waitfor=FWREADY GEN_PIPELINE=0 GEN_DUMP=1
 
 //Ensure dependencies are sent to the client machines
-%sendfile@client gen_flows.py
-%sendfile@client kill_user_processes.py
+%sendfile@client scripts/gen_flows.py
+%sendfile@client scripts/kill_user_processes.py
 
 //The script running stuffs on the dut
 %script@dut sudo=true waitfor=FL_DONE
 p=$(pwd)
 #killall -9 click
-sudo python3 ${NPF_TESTIE_PATH}/kill_user_processes.py --signal 9 --process click --user ${PREFIX}
+sudo python3 -m pip install --user psutil
+sudo python3 ${NPF_TESTIE_PATH}/scripts/kill_user_processes.py --signal 9 --process click --user ${PREFIX}
 sudo rm -rf /dev/hugepages/${PREFIX}map_*
 sleep 5
 $(( "#" if "$PREFIX"=="massimo" else "")) LD_LIBRARY_PATH=/home/tom/workspace/dpdk-updated/install/lib/x86_64-linux-gnu/:/home/tom/workspace/rdma-core/install/usr/local/lib/
