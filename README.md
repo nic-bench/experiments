@@ -18,9 +18,10 @@ The experiments are managed using [NPF](http://github.com/tbarbette/npf/), it wi
    ninja -C build
    sudo ninja -C build install
  ```
- * Compile FastClick (all modifications have been merged into mainline FastClick)
+ * Compile FastClick (all modifications have been merged into mainline FastClick). You need to export the RTE_SDK path to the DPDK directory, as we use some internal libraries of DPDK to parse flow rules.
 
 ```
+export RTE_SDK=/home/tbarbette/workspace/dpdk
 git clone https://github.com/tbarbette/fastclick.git
 cd fastclick
 ./configure --enable-dpdk --enable-intel-cpu --verbose --enable-select=poll CFLAGS="-O3" CXXFLAGS="-std=c++11 -O3"  --disable-dynamic-linking --enable-poll --enable-bound-port-transfer --enable-local --enable-flow --disable-task-stats --disable-cpu-load --enable-flow-api
