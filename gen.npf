@@ -12,13 +12,18 @@ GEN_LENGTH?=1500
 SEED?=
 RULE_FILE=ip.flows
 NRULES?=
-
 NOPRIORITY=( ( $PRIORITY!=0 and "$MODEL" != "E810") or ("$MODEL" == "E810" and $PIPELINE_SUPPORT) )
+
 %script@client autokill=false
+
+//Python script that generates flows and matching (or not) rules
+
 time python3 ${NPF_TESTIE_PATH}/scripts/gen_flows.py $(("$NRULES" if "$NRULES" else "0" )) $PC --format binary $(("" if $PORTS else "--no-ports")) $(("" if $NOPRIORITY else "--no-priority")) --flows $NFLOWS $(("--seed $SEED" if "$SEED" else "")) --min-packets 100000 --length $(( int($GEN_LENGTH - 14) )) --table $TABLE $(("--no-rules" if not "$NRULES" else "")) $(("--ethernet" if $RULES_ETHERNET else ""))
 if [ "$MODEL" = "E810" ] && [ "$PIPELINE_SUPPORT" = 1 ]; then
     echo "E810: replacing priority of default rule"
     sed -e "s/priority 2/priority 0/" -i ip.flows
 fi
+
+//Copying the rules to the folder of interest
 cp ip.flows ${NICBENCH_PATH}
 echo "EVENT FL_DONE"

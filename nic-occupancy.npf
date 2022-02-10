@@ -108,21 +108,21 @@ sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} bin/click --dpdk --file-prefix $PREFIX -
 
 //The configuration of the forwarding NF
 %file@dut forwarder.click
+
+// The FromDPDKDevice elements reads packets from DPDK, $RULES_FILE will be a list of rules generated from gen.npf. Also paint the queue as an annotation of the packet.
 fd0 :: FromDPDKDevice(0,FLOW_ISOLATE false, IPCO false, TCO false, VERBOSE 99, MINQUEUES 2, PAINT_QUEUE true, FLOW_RULES_FILE $RULE_FILE, MODE flow, TIMESTAMP ${DO_CC}, BURST $BURST,
 	// TODO: Temporary fix for e8101. unset was not implemented in fromdpdkdevice parser
 	$(( "//" if "$MODEL" == "E810" else "" )) PAUSE $PAUSE,
 	MAXTHREADS 1)
 $((  "  -> TSCClock(SOURCE fd0, INSTALL false) -> acc :: TimestampAccum " if $DO_CC else "" ))
-//    -> Print(FD)
-    -> PaintSwitch [0-1]=>[0-1] c :: { [0] -> c0 :: Counter -> [0]; [1] -> c1 :: Counter -> [0]; }
-    -> EtherMirror
-/*    -> MarkIPHeader(OFFSET 14)
-    -> IPPrint*/
-    -> avg :: AverageCounterIMP(IGNORE 1, THRESHOLD $THRESH)
+    -> PaintSwitch [0-1]=>[0-1] c :: { [0] -> c0 :: Counter -> [0]; [1] -> c1 :: Counter -> [0]; } //Counts packets according to their "paint", as set by fd0, ie the queue index.
+    -> EtherMirror //Swap MAC addresses
+    -> avg :: AverageCounterIMP(IGNORE 1, THRESHOLD $THRESH) //Count the number of packets per core
     $(( "-> pcc :: TimestampAccum " if $DO_CC else "" ))
-
+    //Transmit packets
     -> ToDPDKDevice(0, BLOCKING false);
 
+//Print a few statistics at the closing of the program
 DriverManager(print "EVENT FWREADY", wait, print "RESULT-DUT_THROUGHPUT $(avg.link_rate)",
             print "RESULT-MATCH $(c/c1.count)",
             print "RESULT-MISS $(c/c0.count)",
@@ -133,18 +133,19 @@ DriverManager(print "EVENT FWREADY", wait, print "RESULT-DUT_THROUGHPUT $(avg.li
             read fd0.xstats,
 );
 
+// Prints some statistics every 2 seconds.
 Script(TYPE ACTIVE,
             wait 2s,
             label loop,
             set time $(now),
-	    set RESULT $(("RESULT" if "$NOMATCHRESULTS"== "0" else "RES")),
-//            print "NF-$time-RESULT-NUMFLOWS $(ruleInstaller.flow_count fd0 whatever)",
+	        set RESULT $(("RESULT" if "$NOMATCHRESULTS"== "0" else "RES")),
             print "NF-$time-$RESULT-MATCH $(c/c1.count)",
             print "NF-$time-$RESULT-MISS $(c/c0.count)",
             print "NF-$time-$RESULT-MPC $(div $(mul $(c/c1.count) 100) $(add $(c/c0.count) $(c/c1.count)))",
             wait 1s,
             goto loop)
 
+//Fixes fd0 to use the first thread only
 StaticThreadSched(fd0 0);
 
 //A serie of parameters to tune graphs
